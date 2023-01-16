@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.ejs": "html",
+        "unistd.h": "c",
+        "sstream": "c",
+        "openssl.h": "c"
+    }
+}

@@ -5104,42 +5104,7 @@ static int compare_socket_address(struct sockaddr *x, struct sockaddr *y)
     if (y->sa_family == AF_INET6){
         fprintf(stderr, "\n y->sa_family = AF_INET6\n");
     }
-    if (x->sa_family == AF_UNIX){
-        fprintf(stderr, "\n x->sa_family = AF_UNIX\n");
-    }
-    if (y->sa_family == AF_UNIX){
-        fprintf(stderr, "\n y->sa_family = AF_UNIX\n");
-    }
-    if (x->sa_family == AF_NETLINK){
-        fprintf(stderr, "\n x->sa_family = AF_NETLINK\n");
-    }
-    if (y->sa_family == AF_NETLINK){
-        fprintf(stderr, "\n y->sa_family = AF_NETLINK\n");
-    }
-    if (x->sa_family == AF_X25){
-        fprintf(stderr, "\n x->sa_family = AF_X25\n");
-    }
-    if (x->sa_family == AF_AX25){
-        fprintf(stderr, "\n x->sa_family = AF_AX25\n");
-    }
-    if (x->sa_family == AF_ATMPVC){
-        fprintf(stderr, "\n x->sa_family = AF_ATMPVC\n");
-    }
-    if (x->sa_family == AF_APPLETALK){
-        fprintf(stderr, "\n x->sa_family = AF_APPLETALK\n");
-    }
-    if (x->sa_family == AF_PACKET){
-        fprintf(stderr, "\n x->sa_family = AF_PACKET\n");
-    }
-    if (x->sa_family == AF_ALG){
-        fprintf(stderr, "\n x->sa_family = AF_ALG\n");
-    }
-    if (x->sa_family == AF_BRIDGE){
-        fprintf(stderr, "\n x->sa_family = AF_BRIDGE\n");
-    }
-    if (x->sa_family == AF_UNSPEC){
-        fprintf(stderr, "\n x->sa_family = AF_NETROM\n");
-    }
+    
 #define CMP(a, b)                                                                                                                  \
     if (a != b)                                                                                                                    \
     return a < b ? -1 : 1

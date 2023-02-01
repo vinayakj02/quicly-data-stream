@@ -67,14 +67,6 @@ struct latency_based_forwarding {
     __u16 fib_tohops;
 };
 
-struct src_addr {
-    struct in_addr v4_src_addr;
-};
-
-struct dst_addr {
-    struct in_addr v4_dst_addr;
-};
-
 /**
  * the QUIC context
  */
@@ -88,29 +80,28 @@ static quicly_cid_plaintext_t next_cid;
  */
 int is_verbose = 0;
 
-// static int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, const char *port, int family, int type,
-//                            int proto)
-// {
-//     struct addrinfo hints, *res;
-//     int err;
+static int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, const char *port, int family, int type,
+                           int proto)
+{
+    struct addrinfo hints, *res;
+    int err;
 
-//     memset(&hints, 0, sizeof(hints));
-//     hints.ai_family = family;
-//     hints.ai_socktype = type;
-//     hints.ai_protocol = proto;
-//     hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE;
-//     if ((err = getaddrinfo(host, port, &hints, &res)) != 0 || res == NULL) {
-//         fprintf(stderr, "failed to resolve address:%s:%s:%s\n", host, port,
-//                 err != 0 ? gai_strerror(err) : "getaddrinfo returned NULL");
-//         return -1;
-//     }
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = family;
+    hints.ai_socktype = type;
+    hints.ai_protocol = proto;
+    hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE;
+    if ((err = getaddrinfo(host, port, &hints, &res)) != 0 || res == NULL) {
+        fprintf(stderr, "failed to resolve address:%s:%s:%s\n", host, port,
+                err != 0 ? gai_strerror(err) : "getaddrinfo returned NULL");
+        return -1;
+    }
 
-//     memcpy(sa, res->ai_addr, res->ai_addrlen);
-//     *salen = res->ai_addrlen;
-
-//     freeaddrinfo(res);
-//     return 0;
-// }
+    memcpy(sa, res->ai_addr, res->ai_addrlen);
+    *salen = res->ai_addrlen;
+    freeaddrinfo(res);
+    return 0;
+}
 
 static void usage(const char *progname)
 {
@@ -218,27 +209,54 @@ static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_l
         fprintf(stderr, "shipping_spec_val->src_addr_type : %x\n", shipping_spec_val->src_addr_type);
         fprintf(stderr, "shipping_spec_val->dst_addr_type : %x\n", shipping_spec_val->dst_addr_type);
         fprintf(stderr, "shipping_spec_val->addr_cast : %x\n", shipping_spec_val->addr_cast);
-        
-        struct src_addr *src_addr_val = (struct src_addr *)(msg->msg_iov[0].iov_base + sizeof(struct ethhdr) +
-                                                            sizeof(struct new_ip_offset) + sizeof(struct shipping_spec));
-        fprintf(stderr, "src_addr_val->src_addr : %x\n", src_addr_val->v4_src_addr);
-
-        struct dst_addr *dst_addr_val = (struct dst_addr *)(msg->msg_iov[0].iov_base + sizeof(struct ethhdr) +
-                                                            sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) +
-                                                            sizeof(struct src_addr));
-        
-        fprintf(stderr, "dst_addr_val->dst_addr : %x\n", dst_addr_val->v4_dst_addr);
-
-
+        // remove the ethernet header, new_ip_offset and shipping_spec from buffer
+        //  memcpy(buf, buf + lenToPayload, rret - lenToPayload);
+        //  rret -= lenToPayload;
         uint8_t tempbuf[ctx.transport_params.max_udp_payload_size];
         // memcpy(tempbuf, buf, sizeof(struct ethhdr));
         memcpy(tempbuf,
-               msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + sizeof(struct src_addr) + sizeof(struct dst_addr),
-               rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec) - sizeof(struct src_addr) - sizeof(struct dst_addr));
-        rret = rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec) - sizeof(struct src_addr) - sizeof(struct dst_addr);
-
+               msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec),
+               rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec));
+        rret = rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec);
 
         dgram_len = rret;
+
+
+        // char ip [INET_ADDRSTRLEN] = "";
+        // char addr [200]="10.0.0.1";
+        // struct sockaddr_in  *ipv4_addr;
+
+        // use resolve address to get the address
+        // struct sockaddr_storage address_ipv4;
+        // socklen_t salen;
+        // char *host = "10.0.0.1";
+        // char *port = "4433";
+
+        // if (resolve_address((struct sockaddr *)&address_ipv4, &salen, host, port, AF_INET, SOCK_RAW, 0) != 0)
+        // exit(1);
+
+        // struct sockaddr_in address;
+        // address.sin_addr.s_addr = inet_addr("10.0.0.1");
+        // address.sin_port = htons(4433);
+
+        //Converts string to address.
+        // inet_pton (AF_INET, addr, &ipv4_addr);
+        // msg->msg_name = (struct sockaddr *)&ipv4_addr;
+        // struct sockaddr_in address;
+        // address.sin_addr.s_addr = inet_addr("10.0.0.2");
+        // address.sin_port = htons("4433");
+        // fprintf(stderr, "address_ipv4 : %s\n", (char *)&address);
+
+
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(4433);
+        addr.sin_addr.s_addr = inet_addr("10.0.0.2");
+
+        msg->msg_name = (struct sockaddr *)&addr;
+
+        // msg->msg_name = (struct sockaddr *)&address;
+
         fprintf("rret : %x", rret);
         /* split UDP datagram into multiple QUIC packets */
         while (off < dgram_len) {
@@ -251,16 +269,15 @@ static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_l
             /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
             if (*conn != NULL) {
                 fprintf(stderr, "Exisiting connection\n");
-                if (quicly_is_destination(*conn, NULL, src_addr_val, &decoded)) {
-                    fprintf(stderr, "before quicly_receive\n");
-                    quicly_receive(*conn, NULL, src_addr_val, &decoded);
+                if (quicly_is_destination(*conn, NULL, msg->msg_name, &decoded) || 1) {
+                    quicly_receive(*conn, NULL, (struct sockaddr *)&addr, &decoded);
                 } else {
                     fprintf(stderr, "failed to accept new incoming connection, this server only allows 1 concurrent connection\n");
                 }
             } else {
                 /* assume that the packet is a new connection */
                 fprintf(stderr, "New connection\n");
-                quicly_accept(conn, &ctx, NULL, src_addr_val, &decoded, NULL, &next_cid, NULL);
+                quicly_accept(conn, &ctx, NULL, (struct sockaddr *)&addr, &decoded, NULL, &next_cid, NULL);
             }
         }
     }
@@ -323,25 +340,7 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
     shipping_spec_val->dst_addr_type = 2;
     shipping_spec_val->addr_cast = 3;
 
-
-    struct src_addr *src_addr_val;
-    src_addr_val =
-        (struct src_addr *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec));
-
-    struct in_addr src_addr;
-    inet_pton(AF_INET, "10.0.0.1", &src_addr);
-    // src_addr_val->v6_src_addr = src_addr;
-    src_addr_val->v4_src_addr = src_addr;
-
-    struct in_addr dest_addr;
-    struct dst_addr *dst_addr_val;
-    dst_addr_val = (struct dst_addr *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) +
-                                       sizeof(struct shipping_spec) + sizeof(struct src_addr));
-    inet_pton(AF_INET, "10.0.0.2", &dest_addr);
-
-
-
-    char *temp = (char *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + sizeof(struct src_addr) + sizeof(struct dst_addr));
+    char *temp = (char *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec));
     char **pChar;
     pChar = &temp;
     memcpy(*pChar, vec->iov_base, vec->iov_len);
@@ -360,8 +359,8 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
     sadr_ll.sll_addr[5] = DESTMAC5;
     sadr_ll.sll_family = AF_PACKET;
 
-    struct msghdr mess = {.msg_name = dst_addr_val, .msg_namelen = sizeof(sadr_ll), .msg_iov = vec, .msg_iovlen = 1};
-    // mess.msg_name = &sadr_ll;
+    struct msghdr mess = {.msg_name = dest, .msg_namelen = sizeof(sadr_ll), .msg_iov = vec, .msg_iovlen = 1};
+    mess.msg_name = &sadr_ll;
     mess.msg_namelen = sizeof(sadr_ll);
     mess.msg_iov = iov;
     mess.msg_iovlen = 1;
@@ -421,6 +420,7 @@ static int run_loop_server(int fd)
             ssize_t rret;
             while ((rret = recvmsg(fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
+            fprintf(stderr, "Received %ld bytes in server\n", rret);
             if (rret > 0) {
                 // fprintf(stderr, "Received %ld bytes\n", rret);
                 process_msg(&conn, &msg, rret);
@@ -479,8 +479,8 @@ int main(int argc, char **argv)
         .cipher_suites = ptls_openssl_cipher_suites,
     };
     quicly_stream_open_t stream_open = {on_stream_open};
-    char *host = "127.0.0.1", *port = "4433";
-    // struct sockaddr_storage sa;
+    char *host = "10.0.0.1", *port = "4433";
+    struct sockaddr_storage sas;
     //
 
     struct sockaddr_ll sa;
@@ -546,8 +546,8 @@ int main(int argc, char **argv)
     argv += optind;
     if (argc != 0)
         host = *argv++;
-    // if (resolve_address((struct sockaddr *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, 0) != 0)
-    //     exit(1);
+    if (resolve_address((struct sockaddr *)&sas, &salen, host, port, AF_INET, SOCK_DGRAM, 0) != 0)
+        exit(1);
 
     // from client
     /* open socket on any port (as a client) */

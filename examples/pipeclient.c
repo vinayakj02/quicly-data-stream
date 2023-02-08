@@ -76,6 +76,8 @@ struct shipping_spec {
     __u8 src_addr_type;
     __u8 dst_addr_type;
     __u8 addr_cast;
+    struct in_addr v4_src_addr;
+    struct in_addr v4_dst_addr;
 };
 // LBF CONTRACT
 struct latency_based_forwarding {
@@ -246,6 +248,7 @@ static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_l
 {
     size_t off = 0;
     size_t rret = dgram_len;
+    
     //decoding the raw packet
     struct ethhdr *eth = (struct ethhdr *)(msg->msg_iov[0].iov_base);
     if (htons(eth->h_proto) == 0x88b6){      
@@ -265,34 +268,66 @@ static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_l
     //remove the ethernet header, new_ip_offset and shipping_spec from buffer
     // memcpy(buf, buf + lenToPayload, rret - lenToPayload);
     // rret -= lenToPayload;
-    uint8_t tempbuf[ctx.transport_params.max_udp_payload_size];
-    // memcpy(tempbuf, buf, sizeof(struct ethhdr));
-    memcpy(tempbuf, msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec), rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec));
-    rret = rret - sizeof(struct ethhdr) -  sizeof(struct new_ip_offset) - sizeof(struct shipping_spec);
+    // uint8_t tempbuf[ctx.transport_params.max_udp_payload_size];
+    // // memcpy(tempbuf, buf, sizeof(struct ethhdr));
+    // memcpy(tempbuf, msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec), rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec));
+    // rret = rret - sizeof(struct ethhdr) -  sizeof(struct new_ip_offset) - sizeof(struct shipping_spec);
 
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(4433);
-    addr.sin_addr.s_addr = inet_addr("10.0.0.1");
+    // struct sockaddr_in addr;
+    // addr.sin_family = AF_INET;
+    // addr.sin_port = htons(4433);
+    // addr.sin_addr.s_addr = inet_addr("10.0.0.1");
 
-    msg->msg_name = (struct sockaddr *)&addr;
+    // msg->msg_name = (struct sockaddr *)&addr;
+
+    struct udphdr *udp = (struct udphdr *)(msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) +
+                                           sizeof(struct shipping_spec));
+
+    struct in_addr src_addr;
+    struct in_addr dst_addr;
+
+    src_addr = shipping_spec_val->v4_src_addr;
+    dst_addr = shipping_spec_val->v4_dst_addr;
+
+    struct sockaddr_in new_sock_addr_in;
+    new_sock_addr_in.sin_family = AF_INET;
+    new_sock_addr_in.sin_port = udp->source;
+    new_sock_addr_in.sin_addr = src_addr;
+
+
+    // uint8_t tempbuf[ctx.transport_params.max_udp_payload_size];
+    // // memcpy(tempbuf, buf, sizeof(struct ethhdr));
+    // memcpy(tempbuf,
+    //        msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) +
+    //            sizeof(struct udphdr),
+    //        rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec) - sizeof(struct udphdr));
+    // rret = rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec) - sizeof(struct udphdr);
+
+    // use memmove to remove the ethernet header, new_ip_offset and shipping_spec , udp header from buffer
+    memmove(msg->msg_iov[0].iov_base, msg->msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) +
+                sizeof(struct shipping_spec) + sizeof(struct udphdr),
+            rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec) - sizeof(struct udphdr));
+    rret = rret - sizeof(struct ethhdr) - sizeof(struct new_ip_offset) - sizeof(struct shipping_spec) - sizeof(struct udphdr);
+
+    msg->msg_iov[0].iov_len = rret;
+
     dgram_len = rret;
 
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
         quicly_decoded_packet_t decoded;
-        if (quicly_decode_packet(&ctx, &decoded, tempbuf, dgram_len, &off) == SIZE_MAX)
+        if (quicly_decode_packet(&ctx, &decoded, msg->msg_iov[0].iov_base, sizeof(msg->msg_iov[0].iov_base), &off) == SIZE_MAX)
             return;
         /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
         if (*conn != NULL) {
-            if (quicly_is_destination(*conn, NULL, msg->msg_name, &decoded) || 1) {
-                quicly_receive(*conn, NULL, (struct sockaddr *)&addr, &decoded);
+            if (quicly_is_destination(*conn, NULL, (struct sockaddr *)&new_sock_addr_in, &decoded) || 1) {
+                quicly_receive(*conn, NULL, (struct sockaddr *)&new_sock_addr_in, &decoded);
             } else {
                 fprintf(stderr, "\nfailed to accept new incoming connection, this server only allows 1 concurrent connection\n");
             }
         } else {
             /* assume that the packet is a new connection */
-            quicly_accept(conn, &ctx, NULL, (struct sockaddr *)&addr, &decoded, NULL, &next_cid, NULL);
+            quicly_accept(conn, &ctx, NULL, (struct sockaddr *)&new_sock_addr_in, &decoded, NULL, &next_cid, NULL);
         }
     }
     }
@@ -375,7 +410,7 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
 {   
 
     // Calculate the total length of the packet, including the custom headers
-    int total_len = sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + vec->iov_len;
+    int total_len = sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + sizeof(struct udphdr) + vec->iov_len;
     struct ifreq ifreq_i;
     memset(&ifreq_i, 0, sizeof(ifreq_i));
     strncpy(ifreq_i.ifr_name, "h1_h2", IFNAMSIZ - 1);
@@ -417,8 +452,25 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
         shipping_spec_val->src_addr_type = 1;
         shipping_spec_val->dst_addr_type = 2;
         shipping_spec_val->addr_cast = 3;
+
+        // ipv4 address 
+        struct in_addr src_addr;
+        inet_pton(AF_INET, "10.0.0.2", &src_addr);
+
+        struct in_addr dst_addr;
+        inet_pton(AF_INET, "10.0.0.1", &dst_addr);
+
+        shipping_spec_val->v4_dst_addr = dst_addr;
+        shipping_spec_val->v4_src_addr = src_addr;
+
+        struct udphdr *udp_header = (struct udphdr *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec));
+
+        udp_header->source = htons(4455);
+        udp_header->dest = htons(4433);
+        udp_header->len = htons(vec->iov_len);
+        udp_header->check = 0;
         
-        char *temp = (char *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec));
+        char *temp = (char *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + sizeof(struct udphdr));
         char **pChar;
         pChar = &temp;
         memcpy(*pChar, vec->iov_base, vec->iov_len);
@@ -427,6 +479,7 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
         struct iovec iov[1];
         iov[0].iov_base = sendbuff;
         iov[0].iov_len = total_len;
+
         struct sockaddr_ll sadr_ll;
         sadr_ll.sll_ifindex = ifreq_i.ifr_ifindex;
         sadr_ll.sll_halen = ETH_ALEN;
@@ -730,9 +783,20 @@ int main(int argc, char **argv)
         fprintf(stderr, "quicly_connect failed:%d\n", ret);
         exit(1);
     }
+    // sleep timer 
+
+    sleep(10);
+
+    fprintf(stderr, "quicly connect done : after sleep\n");
+
     quicly_stream_t *stream; /* we retain the opened stream via the on_stream_open callback */
     quicly_open_stream(client, &stream, 0);
 
+
+    sleep(10);
+
+    fprintf(stderr, "quicly connect done : after sleep\n");
+    
     /* enter the event loop with a connection object */
     return run_loop_client(fd, client);
 }

@@ -167,32 +167,78 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
     quicly_streambuf_ingress_shift(stream, input.len);
 }
 
+
+void print_decoded_packet(quicly_decoded_packet_t *packet) {
+    fprintf(stderr, "\n\nprinting decoded_packet\n");
+    fprintf(stderr, "Packet octets length : %d\n", packet->octets.len);
+    for(int i = 0; i < packet->octets.len; i++) {
+        fprintf(stderr, "%x ", packet->octets.base[i]);
+    }
+    fprintf(stderr, "\nSource CID: %d\n", (int)packet->cid.src.len);
+    
+    fprintf(stderr, "Version: %x\n", packet->version);
+    
+    fprintf(stderr, "Encrypted offset: %zu\n", packet->encrypted_off);
+    
+    fprintf(stderr, "Datagram size: %zu\n", packet->datagram_size);
+    if (packet->decrypted.pn != UINT64_MAX) {
+        fprintf(stderr, "Packet has been decrypted; Packet number: %" PRIu64 ", Key phase: %" PRIu64 "\n",
+            packet->decrypted.pn, packet->decrypted.key_phase);
+    }
+    
+    switch (packet->_is_stateless_reset_cached) {
+        case QUICLY__DECODED_PACKET_CACHED_MAYBE_STATELESS_RESET:
+           fprintf(stderr, "Is stateless reset: unknown\n");
+            break;
+        case QUICLY__DECODED_PACKET_CACHED_IS_STATELESS_RESET:
+            fprintf(stderr, "Is stateless reset: true\n");
+            break;
+        case QUICLY__DECODED_PACKET_CACHED_NOT_STATELESS_RESET:
+            fprintf(stderr, "Is stateless reset: false\n");
+            break;
+    }
+}
+
 static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_len)
 {
     size_t off = 0;
+    fprintf(stderr, "Payload without headers (recvfrom) , rret : %d \n", dgram_len);
 
+    // fprintf(stderr, "dgram_len: %zu\n", dgram_len);
+    for(int i = 0; i < dgram_len; i++) {
+        fprintf(stderr, "%02x ", ((uint8_t *)msg->msg_iov[0].iov_base)[i]);
+    }
+    fprintf(stderr, "\n--------------------------------------------------------------------------------------------\n");
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
         quicly_decoded_packet_t decoded;
-        fprintf(stderr, "Trying quicly_decode_packet\n");
+        
+        fprintf(stderr, "Decoding the QUIC packet ...\n");
         if (quicly_decode_packet(&ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX) {
-            fprintf(stderr, "failed to decode packet\n");
+            fprintf(stderr, "Could not decode packet\n");
             return;
         }
-        fprintf(stderr, "\nTrying quicly_decode_packet done\n");
+
+        // fprintf(stderr, "printing decoded packet after process msg in client\n");
+            // print_decoded_packet(&decoded);
+        fprintf(stderr, "quicly pakcet decoded\n");
         /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
         if (*conn != NULL) {
-            fprintf(stderr, "received packet" );
-
-            if (quicly_is_destination(*conn, NULL, msg->msg_name, &decoded)) {
+            fprintf(stderr, "received new packet\n");
+            
+            if (quicly_is_destination(*conn, NULL, msg->msg_name, &decoded) | 1) {
                 fprintf(stderr, "received packet for existing connection\n");
                 quicly_receive(*conn, NULL, msg->msg_name, &decoded);
             } else {
-                fprintf(stderr, "failed to accept new incoming connection, this server only allows 1 concurrent connection\n");
+                fprintf(stderr, "failed to accept new incoming connection only 1 connection allowed.\n");
             }
         } else {
             fprintf(stderr, "new connection , received packet\n");
+                /* assume that the packet is a new connection */
+                /* assume that the packet is a new connection */
+                fprintf(stderr, "New connection\n");
             /* assume that the packet is a new connection */
+                fprintf(stderr, "New connection\n");
             quicly_accept(conn, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL);
         }
     }
@@ -303,11 +349,56 @@ static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_l
 //     return ret;
 // }
 
+unsigned short calculate_udp_checksum(unsigned short *buffer, int size, struct in_addr src_addr, struct in_addr dst_addr)
+{
+    unsigned long sum = 0;
+    int i;
+
+    // Pseudo header
+    sum += (src_addr.s_addr >> 16) & 0xFFFF;
+    sum += src_addr.s_addr & 0xFFFF;
+    sum += (dst_addr.s_addr >> 16) & 0xFFFF;
+    sum += dst_addr.s_addr & 0xFFFF;
+    sum += htons(IPPROTO_UDP);
+    sum += htons(size);
+
+    // UDP header and data
+    for (i = 0; i < size / 2; i++) {
+        sum += buffer[i];
+    }
+
+    if (size % 2) {
+        sum += ((unsigned short)buffer[i]) & 0xFF00;
+    }
+
+    // Fold the sum to 16 bits
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
 static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
 {
-    fprintf(stderr, "\nsend_one in server\n");
+    // fprintf(stderr, "\nsend_one in server\n");
+    // fprintf(stderr, "vec , payload before sending in server side : \n");
+    // fprintf(stderr, "vec->iov_len : %d\n", vec->iov_len);
+    fprintf(stderr, "Sending Packet from server\n");
+    fprintf(stderr, "Payload before adding newip headers\trret : %d\n", vec->iov_len);
+    // for (int i = 0; i < rret; i++)
+    //     fprintf(stderr, "%02x ", buf[i]);
+                // fprintf(stderr, "=======\n");
+    for(int jj = 0;jj<vec->iov_len;jj ++){
+    //     // print contents of vec 
+        fprintf(stderr, "%02x ", ((uint8_t *)vec->iov_base)[jj]);   
+    }
+
+    fprintf(stderr, "\n------------------------------------------------------------------------------------------------\n");
+    
     // Calculate the total length of the packet, including the custom headers
-    int total_len = sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + sizeof(struct udphdr) + vec->iov_len;
+    int total_len =
+        sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) + sizeof(struct udphdr) + vec->iov_len;
     struct ifreq ifreq_i;
     memset(&ifreq_i, 0, sizeof(ifreq_i));
     strncpy(ifreq_i.ifr_name, "h2_h1", IFNAMSIZ - 1);
@@ -360,13 +451,15 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
     shipping_spec_val->v4_dst_addr = dst_addr;
     shipping_spec_val->v4_src_addr = src_addr;
 
+
     struct udphdr *udp_header =
         (struct udphdr *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec));
 
     udp_header->source = htons(4433);
-    udp_header->dest = htons(4455);
-    udp_header->len = htons(vec->iov_len);
-    udp_header->check = 0;
+    udp_header->dest = htons(50001);
+    udp_header->len = htons(vec->iov_len + sizeof(struct udphdr));
+    // udp_header->check = 0;
+    udp_header->check = calculate_udp_checksum((unsigned short *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec)), vec->iov_len + sizeof(struct udphdr), src_addr, dst_addr);
 
     char *temp = (char *)(sendbuff + sizeof(struct ethhdr) + sizeof(struct new_ip_offset) + sizeof(struct shipping_spec) +
                           sizeof(struct udphdr));
@@ -395,6 +488,7 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
     mess.msg_iovlen = 1;
     mess.msg_control = 0;
     mess.msg_controllen = 0;
+    mess.msg_flags = 0;
     int ret;
 
     while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
@@ -450,33 +544,33 @@ static int run_loop_server(int fd)
             ssize_t rret;
             while ((rret = recvmsg(fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
-            fprintf(stderr, "Received %ld bytes in server\n", rret);
-            fprintf(stderr, "Received msg_iovlen %d\n", msg.msg_iovlen);
+            fprintf(stderr, "\nReceived %ld bytes in server (recvmsg)\n", rret);
+            // fprintf(stderr, "Received msg_iovlen %d\n", msg.msg_iovlen);
 
             if (rret > 0) {
-                fprintf(stderr, "msg->msg_name = %hu", (*(struct sockaddr_ll *)msg.msg_iov).sll_family);
+                // fprintf(stderr, "msg->msg_name = %hu", (*(struct sockaddr_ll *)msg.msg_iov).sll_family);
 
-                // print contents of vec using for loop
-                fprintf(stderr, "\nbefore removing headers , \n rret : %d \nvec contents: \n", rret);
-                for (int i = 0; i < rret; i++)
-                    fprintf(stderr, "%02x ", buf[i]);
-                fprintf(stderr, "=======\n");
+                // // print contents of vec using for loop
+                // fprintf(stderr, "\nbefore removing headers , \n rret : %d \nvec contents: \n", rret);
+                // for (int i = 0; i < rret; i++)
+                //     fprintf(stderr, "%02x ", buf[i]);
+                // fprintf(stderr, "=======\n");
 
                 // changing msg->msg_name
 
                 struct ethhdr *eth = (struct ethhdr *)(msg.msg_iov[0].iov_base);
 
                 struct new_ip_offset *new_ip_offset_val = (struct new_ip_offset *)(msg.msg_iov[0].iov_base + sizeof(struct ethhdr));
-                fprintf(stderr, "new_ip_offset_val->shipping_offset : %x\n", new_ip_offset_val->shipping_offset);
-                fprintf(stderr, "new_ip_offset_val->contract_offset : %x\n", new_ip_offset_val->contract_offset);
-                fprintf(stderr, "new_ip_offset_val->payload_offset : %x\n", new_ip_offset_val->payload_offset);
+                // fprintf(stderr, "new_ip_offset_val->shipping_offset : %x\n", new_ip_offset_val->shipping_offset);
+                // fprintf(stderr, "new_ip_offset_val->contract_offset : %x\n", new_ip_offset_val->contract_offset);
+                // fprintf(stderr, "new_ip_offset_val->payload_offset : %x\n", new_ip_offset_val->payload_offset);
 
                 // print shipping_spec
                 struct shipping_spec *shipping_spec_val =
                     (struct shipping_spec *)(msg.msg_iov[0].iov_base + sizeof(struct ethhdr) + sizeof(struct new_ip_offset));
-                fprintf(stderr, "shipping_spec_val->src_addr_type : %x\n", shipping_spec_val->src_addr_type);
-                fprintf(stderr, "shipping_spec_val->dst_addr_type : %x\n", shipping_spec_val->dst_addr_type);
-                fprintf(stderr, "shipping_spec_val->addr_cast : %x\n", shipping_spec_val->addr_cast);
+                // fprintf(stderr, "shipping_spec_val->src_addr_type : %x\n", shipping_spec_val->src_addr_type);
+                // fprintf(stderr, "shipping_spec_val->dst_addr_type : %x\n", shipping_spec_val->dst_addr_type);
+                // fprintf(stderr, "shipping_spec_val->addr_cast : %x\n", shipping_spec_val->addr_cast);
 
                 struct in_addr src_addr;
                 struct in_addr dst_addr;
@@ -520,11 +614,11 @@ static int run_loop_server(int fd)
 
                 // printing contents of iov base
 
-                fprintf(stderr, "\nvec contents after removing headers , rret : %d \n", rret);
-                for (int i = 0; i < rret; i++)
-                    fprintf(stderr, "%02x ", *(uint8_t *)(msg.msg_iov[0].iov_base + i));
-                fprintf(stderr, "\n*****************************************\n");
-                fprintf(stderr, "\ncalling process_msg in server\n");
+                // fprintf(stderr, "\nvec contents after removing headers , rret : %d \n", rret);
+                // for (int i = 0; i < rret; i++)
+                //     fprintf(stderr, "%02x ", *(uint8_t *)(msg.msg_iov[0].iov_base + i));
+                // fprintf(stderr, "\n*****************************************\n");
+                fprintf(stderr, "\nProcessing data in server process_msg() ...\n");                
                 process_msg(&conn, &msg, rret);
             }
         }
@@ -532,11 +626,18 @@ static int run_loop_server(int fd)
         /* send QUIC packets, if any */
         if (conn != NULL) {
             quicly_address_t dest, src;
+            /*
+            typedef union st_quicly_address_t {
+            struct sockaddr sa;
+            struct sockaddr_in sin;
+            struct sockaddr_in6 sin6;
+            } quicly_address_t;
+            */
             struct iovec dgrams[10];
             uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * ctx.transport_params.max_udp_payload_size];
             size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
             int ret = quicly_send(conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
-            // fprintf(stderr, "dest.sa->sin_port : %u\n", ((struct sockaddr_in)(dest.sa)).sin_port);
+            
             switch (ret) {
             case 0: {
                 size_t j;
@@ -550,7 +651,7 @@ static int run_loop_server(int fd)
                 conn = NULL;
                 break;
             default:
-                fprintf(stderr, "quicly_send returned %d\n", ret);
+                // fprintf(stderr, "quicly_send returned %d\n", ret);
                 return 1;
             }
         }
